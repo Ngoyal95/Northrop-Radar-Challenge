@@ -47,6 +47,7 @@ for offset = 0:0.1:3
     
     %CFAR Implementation
     %2D window CA-CFAR
+    %https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
     refLength=32;
     guardLength=10;
     offset=1;
