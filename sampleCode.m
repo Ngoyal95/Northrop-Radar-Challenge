@@ -12,7 +12,7 @@ load('OutboundCarSample.mat')
 Brd         =   Adf24Tx2Rx4();
 N           =   Brd.Get('N'); %256
 fs          =   Brd.Get('fs'); %1000000
-c0          =   3e8; %speed of light
+c0          =   3e8;
 
 NFFT = 256;
 NFFTVel = 128;
@@ -40,56 +40,33 @@ nDopp = 128;
 %Initialize matrix for holding range/Doppler maps for each channel
 RangexDopplerxChannel = zeros(nRng,nDopp,4);
 
-% Dont touch above code, initializes data sets and computes the velocities
-% for us
-
-for offset = 0:0.1:3
-    
-    %CFAR Implementation
-    %2D window CA-CFAR
-    %https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
-    refLength=32;
-    guardLength=10;
-    offset=1;
-    cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1);
-    cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
-    cfarWin=cfarWin/sum(cfarWin);
-
-    figure
-    for sampleNum = 1:16
-        RangexDopplerxChannel_sum_over_channels = zeros(256,128);
-        for ii = 1:4 %This is a loop over the 4 Rx channels
-            %Pull out a single sample of data (for a single channel)
-            FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum)); %extract the current FastFreq and SlowTime for the current channel and sample
-
-            RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
-            RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
-            RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
-            RangexDopplerxChannel_sum_over_channels = RangexDopplerxChannel_sum_over_channels + RangexDopplerxChannel(:,:,ii);
-
-        end
-            % Display range doppler map
-            %Make image of data, note only half of the range is used (other half is invalid)
-
-
-            noiseLevel=conv2(RangexDopplerxChannel_sum_over_channels(1:128,:),cfarWin,'same');
-            cfarThreshold=noiseLevel+offset;
-
-            RangexDopplerxChannel_sum_over_channels(1:128,:)= RangexDopplerxChannel_sum_over_channels(1:128,:) - cfarThreshold;
-
-            imagesc(vVel, vRange(1:128), 10*log10(abs(RangexDopplerxChannel_sum_over_channels(1:128,:))));
-            title('Range-doppler over all channels', num2str(offset))
-            grid on;
-            xlabel('v (m/s)');
-            ylabel('R (m)');
-            colormap('jet')
-            caxis([-20 20])
-            set(gca,'YDir','normal')
-        pause(1.0)
+figure
+for sampleNum = 1:16
+    for ii = 1:4 %This is a loop over the 4 Rx channels
+        %Pull out a single sample of data (for a single channel)
+        FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum));
+        
+        RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
+        RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
+        RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
+        
+        % Display range doppler map
+        subplot(2,2,ii)
+        %Make image of data, note only half of the range is used (other half is invalid)
+        imagesc(vVel, vRange(1:128), 10*log10(abs(RangexDopplerxChannel(1:128,:,ii))));
+        title(['Channel #',num2str(ii)])
+        grid on;
+        xlabel('v (m/s)');
+        ylabel('R (m)');
+        colormap('jet')
+        caxis([-20 20])
+        set(gca,'YDir','normal')
     end
+    pause(1.0)
 end
 
-%%
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %                         Search Angle Example                            %
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
