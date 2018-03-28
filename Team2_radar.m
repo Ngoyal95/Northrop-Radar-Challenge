@@ -62,14 +62,15 @@ cfarWin=cfarWin./sum(cfarWin(:));
 
 % belief is used to track the object
 belief = ones(128, 128) / (128*128);
-%belief(100,:) = 1;
 
+% the range kernel defines how much noise we expect in our motion model
 sigma = 3;
 sz = 30;    % length of gaussFilter vector
 x = linspace(-sz / 2, sz / 2, sz);
 range_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
 range_kernel = range_kernel / sum (range_kernel); % normalize
 
+% the doppler kernel defines how much acceleration we can expect
 sigma = 30;
 sz = 100;    % length of gaussFilter vector
 x = linspace(-sz / 2, sz / 2, sz);
@@ -92,18 +93,21 @@ for sampleNum = 1:16
     
     % Calculate range doppler map
     % Make image of data, note only half of the range is used (other half is invalid)
-
     pmf = abs(accum(1:128,:)/4);
     noiseLevel=conv2(pmf,cfarWin,'same');
     cfarThreshold=noiseLevel+offset;
 
+    % create binary mask from cfarTheshold
     Idx = pmf - cfarThreshold <= 0;
+    % remove detections around 0 velocity
     Idx(:,vVel < 0.5 & vVel > - 0.5) = 1;
+    % dilate the mask to get more information about detections
     Idx = logical(1 - Idx);
     se = strel('disk', 5);
     Idx = imdilate(Idx, se);
     Idx = logical(1 - Idx);
 
+    % normalize data and apply mask
     pmf = 10*log10(pmf);
     pmf = pmf - min(pmf(:));
     pmf = pmf ./ max(pmf(:));
@@ -111,8 +115,9 @@ for sampleNum = 1:16
     
     % Tracking algorithm
     
-    % Prediction update
+    % Prediction update - applies motion model
     for i = 1:size(belief, 2)
+        % shift ranges according to velocity
         if vVel(i) > 0
             n = floor(vVel(i) * dt + 0.5);
             belief(:, i) = [zeros(n, 1); belief(1:end-n, i)];     
@@ -120,15 +125,19 @@ for sampleNum = 1:16
             n = floor(-vVel(i) * dt + 0.5);
             belief(:, i) = [belief(n+1:end, i); zeros(n, 1)];
         end
+        
+        % convolve with range_kernel to model uncertainty in position
         belief(:, i) = conv(belief(:, i), range_kernel, 'same');
       
     end
     
-    % Correction update
+    % convolve with doppler_kernel to model uncertainty in velocity
     for i = 1:size(belief, 1)
         belief(i, :) = conv(belief(i, :), doppler_kernel, 'same');
     end
     
+    
+    % Correction update - uses range doppler map 
     for i = 1:size(belief, 1)
         for j = 1:size(belief, 2)
             belief(i, j) = belief(i, j) * pmf(i, j);
