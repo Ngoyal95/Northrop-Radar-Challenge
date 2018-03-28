@@ -43,66 +43,59 @@ RangexDopplerxChannel = zeros(nRng,nDopp,4);
 % Dont touch above code, initializes data sets and computes the velocities
 % for us
 
-for offset = 1
-    
-    %CFAR Implementation
-    %2D window CA-CFAR
-    %https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
-    refLength=10;
-    guardLength=2;
-    offset=0.2;
-    
-    cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
-    
-    %need to modify kernel for 2D window
-    cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
-   
-    cfarWin=cfarWin./sum(cfarWin(:));
-
-    figure
-    for sampleNum = 1:16
-        RangexDopplerxChannel_sum_over_channels = zeros(256,128);
-        for ii = 1:4 %This is a loop over the 4 Rx channels
-            %Pull out a single sample of data (for a single channel)
-            FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum)); %extract the current FastFreq and SlowTime for the current channel and sample
-
-            RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
-            RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
-            RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
-            RangexDopplerxChannel_sum_over_channels = RangexDopplerxChannel_sum_over_channels + RangexDopplerxChannel(:,:,ii);
-
-        end
-            % Display range doppler map
-            %Make image of data, note only half of the range is used (other half is invalid)
 
     
-            pmf = abs(RangexDopplerxChannel_sum_over_channels(1:128,:));
-            noiseLevel=conv2(pmf,cfarWin,'same');
-            cfarThreshold=noiseLevel+offset;
-            
-            Idx = pmf - cfarThreshold <= 0;
-            
-            pmf = 10*log10(pmf);
-            
-            pmf = pmf - min(pmf(:));
-            pmf = pmf ./ max(pmf(:));
-            pmf(Idx) = 0;
-            pmf(:,vVel < 0.5 & vVel > - 0.5) = 0;
-            
+%CFAR Implementation
+%2D window CA-CFAR
+%https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
+refLength=10;
+guardLength=2;
+offset=0.05;
 
-            %pmf(pmf - cfarThreshold <= 0) = 0;
-            
-           
-            %pmf = pmf * 100;
-            imagesc(vVel, vRange(1:128), pmf);
-            %title('Range-doppler over all channels', num2str(offset))
-            grid on;
-            xlabel('v (m/s)');
-            ylabel('R (m)');
-            colormap('jet')
-            colorbar;
-            caxis([0 1])
-            set(gca,'YDir','normal')
-        pause(1.0)
+cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
+
+%need to modify kernel for 2D window
+cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
+
+cfarWin=cfarWin./sum(cfarWin(:));
+
+figure
+for sampleNum = 1:16
+    accum = zeros(256,128);
+    for ii = 1:4 %This is a loop over the 4 Rx channels
+        %Pull out a single sample of data (for a single channel)
+        FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum)); %extract the current FastFreq and SlowTime for the current channel and sample
+
+        RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
+        RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
+        RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
+        accum = accum + RangexDopplerxChannel(:,:,ii);
     end
+    % Display range doppler map
+    %Make image of data, note only half of the range is used (other half is invalid)
+
+
+    pmf = abs(accum(1:128,:)/4);
+    noiseLevel=conv2(pmf,cfarWin,'same');
+    cfarThreshold=noiseLevel+offset;
+
+    Idx = pmf - cfarThreshold <= 0;
+
+    pmf = 10*log10(pmf);
+    pmf = pmf - min(pmf(:));
+    pmf = pmf ./ max(pmf(:));
+    pmf(Idx) = 0;
+    pmf(:,vVel < 0.5 & vVel > - 0.5) = 0;
+
+    imagesc(vVel, vRange(1:128), pmf);
+    title('Range-doppler over all channels')
+    grid on;
+    xlabel('v (m/s)');
+    ylabel('R (m)');
+    colormap('jet')
+    colorbar;
+    caxis([0 1])
+    set(gca,'YDir','normal')
+    pause(1.0)
 end
+
