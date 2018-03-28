@@ -64,14 +64,20 @@ cfarWin=cfarWin./sum(cfarWin(:));
 belief = ones(128, 128) / (128*128);
 %belief(100,:) = 1;
 
-sigma = 5;
+sigma = 3;
 sz = 30;    % length of gaussFilter vector
 x = linspace(-sz / 2, sz / 2, sz);
-gauss_kernel = exp(-x .^ 2 / (2 * sigma ^ 2));
-gauss_kernel = gauss_kernel / sum (gauss_kernel); % normalize
+range_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
+range_kernel = range_kernel / sum (range_kernel); % normalize
+
+sigma = 30;
+sz = 100;    % length of gaussFilter vector
+x = linspace(-sz / 2, sz / 2, sz);
+doppler_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
+doppler_kernel = doppler_kernel / sum (doppler_kernel); % normalize
 
 dt = 1;
-figure;
+figure(1);
 for sampleNum = 1:16
     accum = zeros(256,128);
     for ii = 1:4 %This is a loop over the 4 Rx channels
@@ -92,12 +98,16 @@ for sampleNum = 1:16
     cfarThreshold=noiseLevel+offset;
 
     Idx = pmf - cfarThreshold <= 0;
+    Idx(:,vVel < 0.5 & vVel > - 0.5) = 1;
+    Idx = logical(1 - Idx);
+    se = strel('disk', 5);
+    Idx = imdilate(Idx, se);
+    Idx = logical(1 - Idx);
 
     pmf = 10*log10(pmf);
     pmf = pmf - min(pmf(:));
     pmf = pmf ./ max(pmf(:));
     pmf(Idx) = 0.001;
-    pmf(:,vVel < 0.5 & vVel > - 0.5) = 0.001;
     
     % Tracking algorithm
     
@@ -110,13 +120,13 @@ for sampleNum = 1:16
             n = floor(-vVel(i) * dt + 0.5);
             belief(:, i) = [belief(n+1:end, i); zeros(n, 1)];
         end
-        belief(:, i) = conv(belief(:, i), gauss_kernel', 'same');
+        belief(:, i) = conv(belief(:, i), range_kernel, 'same');
       
     end
     
     % Correction update
     for i = 1:size(belief, 1)
-        belief(i, :) = conv(belief(i, :), gauss_kernel, 'same');
+        belief(i, :) = conv(belief(i, :), doppler_kernel, 'same');
     end
     
     for i = 1:size(belief, 1)
@@ -135,7 +145,7 @@ for sampleNum = 1:16
     ylabel('R (m)');
     colormap('jet')
     colorbar;
-    caxis([-20 20])
+    %caxis([-20 20])
     set(gca,'YDir','normal')
     
     subplot(2, 2, 2);
@@ -161,6 +171,7 @@ for sampleNum = 1:16
     xlim([vVel(1) vVel(end)]);
     ylim([vRange(1) vRange(128)]);
     title('Tracker');
+    colorbar;
     pause(1.0)
 end
 
