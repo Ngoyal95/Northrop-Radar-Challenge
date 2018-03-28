@@ -59,7 +59,19 @@ cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLen
 
 cfarWin=cfarWin./sum(cfarWin(:));
 
-figure
+
+% belief is used to track the object
+belief = ones(128, 128) / (128*128);
+%belief(100,:) = 1;
+
+sigma = 5;
+sz = 30;    % length of gaussFilter vector
+x = linspace(-sz / 2, sz / 2, sz);
+gauss_kernel = exp(-x .^ 2 / (2 * sigma ^ 2));
+gauss_kernel = gauss_kernel / sum (gauss_kernel); % normalize
+
+dt = 1;
+figure;
 for sampleNum = 1:16
     accum = zeros(256,128);
     for ii = 1:4 %This is a loop over the 4 Rx channels
@@ -71,9 +83,9 @@ for sampleNum = 1:16
         RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
         accum = accum + RangexDopplerxChannel(:,:,ii);
     end
-    % Display range doppler map
-    %Make image of data, note only half of the range is used (other half is invalid)
-
+    
+    % Calculate range doppler map
+    % Make image of data, note only half of the range is used (other half is invalid)
 
     pmf = abs(accum(1:128,:)/4);
     noiseLevel=conv2(pmf,cfarWin,'same');
@@ -84,11 +96,51 @@ for sampleNum = 1:16
     pmf = 10*log10(pmf);
     pmf = pmf - min(pmf(:));
     pmf = pmf ./ max(pmf(:));
-    pmf(Idx) = 0;
-    pmf(:,vVel < 0.5 & vVel > - 0.5) = 0;
-
+    pmf(Idx) = 0.001;
+    pmf(:,vVel < 0.5 & vVel > - 0.5) = 0.001;
+    
+    % Tracking algorithm
+    
+    % Prediction update
+    for i = 1:size(belief, 2)
+        if vVel(i) > 0
+            n = floor(vVel(i) * dt + 0.5);
+            belief(:, i) = [zeros(n, 1); belief(1:end-n, i)];     
+        else
+            n = floor(-vVel(i) * dt + 0.5);
+            belief(:, i) = [belief(n+1:end, i); zeros(n, 1)];
+        end
+        belief(:, i) = conv(belief(:, i), gauss_kernel', 'same');
+      
+    end
+    
+    % Correction update
+    for i = 1:size(belief, 1)
+        belief(i, :) = conv(belief(i, :), gauss_kernel, 'same');
+    end
+    
+    for i = 1:size(belief, 1)
+        for j = 1:size(belief, 2)
+            belief(i, j) = belief(i, j) * pmf(i, j);
+        end
+    end
+    belief = belief / sum(belief(:));
+    
+    % Display range doppler map
+    subplot(2, 2, 1);
+    imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
+    title('Raw Range-doppler over all channels')
+    grid on;
+    xlabel('v (m/s)');
+    ylabel('R (m)');
+    colormap('jet')
+    colorbar;
+    caxis([-20 20])
+    set(gca,'YDir','normal')
+    
+    subplot(2, 2, 2);
     imagesc(vVel, vRange(1:128), pmf);
-    title('Range-doppler over all channels')
+    title('Range-doppler CFAR')
     grid on;
     xlabel('v (m/s)');
     ylabel('R (m)');
@@ -96,6 +148,19 @@ for sampleNum = 1:16
     colorbar;
     caxis([0 1])
     set(gca,'YDir','normal')
+    
+    subplot(2, 2, 3);
+    imagesc(vVel, vRange(1:128), belief);
+    title('Histogram filter');
+    colorbar;
+    set(gca,'YDir','normal')
+    
+    [i, j] = find(belief == max(belief(:)));
+    subplot(2, 2, 4);
+    plot(vVel(j), vRange(i), 'r*');
+    xlim([vVel(1) vVel(end)]);
+    ylim([vRange(1) vRange(128)]);
+    title('Tracker');
     pause(1.0)
 end
 
