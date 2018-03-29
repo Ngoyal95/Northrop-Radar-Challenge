@@ -43,99 +43,144 @@ RangexDopplerxChannel = zeros(nRng,nDopp,4);
 % Dont touch above code, initializes data sets and computes the velocities
 % for us
 
-for offset = 0:0.1:3
+
     
-    %CFAR Implementation
-    %2D window CA-CFAR
-    %https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
-    refLength=32;
-    guardLength=10;
-    offset=1;
-    
-    cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
-    
-    %need to modify kernel for 2D window
-    cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
-   
-    cfarWin=cfarWin/sum(cfarWin);
+%CFAR Implementation
+%2D window CA-CFAR
+%https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
+refLength=10;
+guardLength=2;
+offset=0.05;
 
-    figure
-    for sampleNum = 1:16
-        RangexDopplerxChannel_sum_over_channels = zeros(256,128);
-        for ii = 1:4 %This is a loop over the 4 Rx channels
-            %Pull out a single sample of data (for a single channel)
-            FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum)); %extract the current FastFreq and SlowTime for the current channel and sample
+cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
 
-            RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
-            RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
-            RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
-            RangexDopplerxChannel_sum_over_channels = RangexDopplerxChannel_sum_over_channels + RangexDopplerxChannel(:,:,ii);
+%need to modify kernel for 2D window
+cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
 
-        end
-            % Display range doppler map
-            %Make image of data, note only half of the range is used (other half is invalid)
+cfarWin=cfarWin./sum(cfarWin(:));
 
 
-            noiseLevel=conv2(RangexDopplerxChannel_sum_over_channels(1:128,:),cfarWin,'same');
-            cfarThreshold=noiseLevel+offset;
+% belief is used to track the object
+belief = ones(128, 128) / (128*128);
 
-            RangexDopplerxChannel_sum_over_channels(1:128,:)= RangexDopplerxChannel_sum_over_channels(1:128,:) - cfarThreshold;
+% the range kernel defines how much noise we expect in our motion model
+sigma = 3;
+sz = 30;    % length of gaussFilter vector
+x = linspace(-sz / 2, sz / 2, sz);
+range_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
+range_kernel = range_kernel / sum (range_kernel); % normalize
 
-            imagesc(vVel, vRange(1:128), 10*log10(abs(RangexDopplerxChannel_sum_over_channels(1:128,:))));
-            title('Range-doppler over all channels', num2str(offset))
-            grid on;
-            xlabel('v (m/s)');
-            ylabel('R (m)');
-            colormap('jet')
-            caxis([-20 20])
-            set(gca,'YDir','normal')
-        pause(1.0)
+% the doppler kernel defines how much acceleration we can expect
+sigma = 30;
+sz = 100;    % length of gaussFilter vector
+x = linspace(-sz / 2, sz / 2, sz);
+doppler_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
+doppler_kernel = doppler_kernel / sum (doppler_kernel); % normalize
+
+dt = 1;
+figure(1);
+for sampleNum = 1:16
+    accum = zeros(256,128);
+    for ii = 1:4 %This is a loop over the 4 Rx channels
+        %Pull out a single sample of data (for a single channel)
+        FastFreqxSlowTime = squeeze(FastFreqxSlowTimexChannelxSample(:,:,ii,sampleNum)); %extract the current FastFreq and SlowTime for the current channel and sample
+
+        RangexSlowTime =   fft(FastFreqxSlowTime.*Win2D,NFFT,1).*1/ScaWin; %Range by pulse
+        RangexDopplerNonShifted  =   fft(RangexSlowTime.*WinVel2D, NFFTVel, 2)./ScaWinVel; %Range by Doppler
+        RangexDopplerxChannel(:,:,ii) = fftshift(RangexDopplerNonShifted, 2); %Shift to properly align 0 Doppler to middle
+        accum = accum + RangexDopplerxChannel(:,:,ii);
     end
-end
-
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%                         Search Angle Example                            %
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%Pull out data for a particular CPI (The 10th one in this case)
-FastFreqxSlowTimexChannel = squeeze(FastFreqxSlowTimexChannelxSample(:,:,:,10));
-
-RangexSlowTimexChannel = fft(FastFreqxSlowTimexChannel.*repmat(Win2D,1,1,4),NFFT,1).*1/ScaWin; %Range by pulse
-RangexDopplerxChannel = fft(RangexSlowTimexChannel.*repmat(WinVel2D,1,1,4), NFFTVel, 2)./ScaWinVel; %Range by Doppler
-%Shift the output of the fft so that 0 Doppler is in the middle (the 2
-%indicates that the fftshift is done on the second dimension of the data (Doppler)
-RangexDopplerxChannel = fftshift(RangexDopplerxChannel, 2);
-
-figure
-angleVec = linspace(-30, 30,61); %Vector of angles to search through
-for ii = 1:numel(angleVec)
-    c0 = 3e8;
-    fc = 24.15e9;
-    lambda = c0/fc;
-    angle = angleVec(ii); %50;
     
-    %Compute the phase for a wavefront coming in at the angle of interest
-    %Note that there are 4 values and this assumes that the Rx elements are
-    %spaced at 0.5 wavelengths (which should be close to true, might need
-    %refined with actual values)
-    p = (2*pi*sind(-angle)*[-1.5; -0.5; 0.5; 1.5]*(lambda/2))/lambda;
-    %Compute the complex weights which will be applied to the 4 channels to
-    %"steer" the array in the look direction and normalize the values
-    w = exp(1i*p);
-    w = w/norm(w);
+    % Calculate range doppler map
+    % Make image of data, note only half of the range is used (other half is invalid)
+    pmf = abs(accum(1:128,:)/4);
+    noiseLevel=conv2(pmf,cfarWin,'same');
+    cfarThreshold=noiseLevel+offset;
+
+    % create binary mask from cfarTheshold
+    Idx = pmf - cfarThreshold <= 0;
+    % remove detections around 0 velocity
+    Idx(:,vVel < 0.5 & vVel > - 0.5) = 1;
+    % dilate the mask to get more information about detections
+    Idx = logical(1 - Idx);
+    se = strel('disk', 5);
+    Idx = imdilate(Idx, se);
+    Idx = logical(1 - Idx);
+
+    % normalize data and apply mask
+    pmf = 10*log10(pmf);
+    pmf = pmf - min(pmf(:));
+    pmf = pmf ./ max(pmf(:));
+    pmf(Idx) = 0.001;
     
-    %Combine the four channels with the weights computed earlier
-    RangexDoppler = abs(sum(RangexDopplerxChannel .*repmat(reshape(conj(w),1,1,4),nRng,nDopp,1),3));
+    % Tracking algorithm
     
-    %Make image of data, note only half of the range is used (other half is invalid)
-    imagesc(vVel, vRange(1:128), 10*log10(abs(RangexDoppler(1:128,:))));
-    title(['Scan Angle = ',num2str(angle),' deg'])
+    % Prediction update - applies motion model
+    for i = 1:size(belief, 2)
+        % shift ranges according to velocity
+        if vVel(i) > 0
+            n = floor(vVel(i) * dt + 0.5);
+            belief(:, i) = [zeros(n, 1); belief(1:end-n, i)];     
+        else
+            n = floor(-vVel(i) * dt + 0.5);
+            belief(:, i) = [belief(n+1:end, i); zeros(n, 1)];
+        end
+        
+        % convolve with range_kernel to model uncertainty in position
+        belief(:, i) = conv(belief(:, i), range_kernel, 'same');
+      
+    end
+    
+    % convolve with doppler_kernel to model uncertainty in velocity
+    for i = 1:size(belief, 1)
+        belief(i, :) = conv(belief(i, :), doppler_kernel, 'same');
+    end
+    
+    
+    % Correction update - uses range doppler map 
+    for i = 1:size(belief, 1)
+        for j = 1:size(belief, 2)
+            belief(i, j) = belief(i, j) * pmf(i, j);
+        end
+    end
+    belief = belief / sum(belief(:));
+    
+    % Display range doppler map
+    subplot(2, 2, 1);
+    imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
+    title('Raw Range-doppler over all channels')
     grid on;
     xlabel('v (m/s)');
     ylabel('R (m)');
     colormap('jet')
-    caxis([-20 20])
+    colorbar;
+    %caxis([-20 20])
     set(gca,'YDir','normal')
-    pause(0.2)
+    
+    subplot(2, 2, 2);
+    imagesc(vVel, vRange(1:128), pmf);
+    title('Range-doppler CFAR')
+    grid on;
+    xlabel('v (m/s)');
+    ylabel('R (m)');
+    colormap('jet')
+    colorbar;
+    caxis([0 1])
+    set(gca,'YDir','normal')
+    
+    subplot(2, 2, 3);
+    imagesc(vVel, vRange(1:128), belief);
+    title('Histogram filter');
+    colorbar;
+    set(gca,'YDir','normal')
+    
+    [i, j] = find(belief == max(belief(:)));
+    subplot(2, 2, 4);
+    plot(vVel(j), vRange(i), 'r*');
+    xlim([vVel(1) vVel(end)]);
+    ylim([vRange(1) vRange(128)]);
+    title('Tracker');
+    colorbar;
+    pause(1.0)
 end
+
