@@ -53,8 +53,6 @@ guardLength=2;
 offset=0.05;
 
 cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
-
-%need to modify kernel for 2D window
 cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
 
 cfarWin=cfarWin./sum(cfarWin(:));
@@ -176,11 +174,12 @@ for sampleNum = 1:16
     
     [i, j] = find(belief == max(belief(:)));
     subplot(2, 2, 4);
-    plot(vVel(j), vRange(i), 'r*');
+    plot(vVel(j), vRange(i), 'r*'); %plot the tracker (v,R)
     xlim([vVel(1) vVel(end)]);
     ylim([vRange(1) vRange(128)]);
     title('Tracker');
     colorbar;
-    pause(1.0)
+    fprintf('TRACKER: R: %f\t v: %f\n', vRange(i), vVel(j));
+    pause(0.025)
 end
 
