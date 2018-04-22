@@ -86,7 +86,7 @@ RangexDopplerxChannel = zeros(nRng,nDopp,4);
 %https://www.mathworks.com/matlabcentral/answers/165561-how-to-write-a-m-file-code-to-cfar-for-fmcw-radar
 refLength=10;
 guardLength=2;
-offset=0.05;
+offset=0.000005;
 
 cfarWin=ones((refLength+guardLength)*2+1,(refLength+guardLength)*2+1); %2D window
 cfarWin(refLength+1:refLength+1+2*guardLength,refLength+1:refLength+1+2*guardLength)=0;
@@ -95,7 +95,7 @@ cfarWin=cfarWin./sum(cfarWin(:));
 
 
 % belief is used to track the object
-belief = ones(128, 128) / (128*128);
+belief = ones(279, 256) / (279*256);
 
 % the range kernel defines how much noise we expect in our motion model
 sigma = 3;
@@ -105,18 +105,18 @@ range_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
 range_kernel = range_kernel / sum (range_kernel); % normalize
 
 % the doppler kernel defines how much acceleration we can expect
-sigma = 30;
-sz = 100;    % length of gaussFilter vector
+sigma = 60;
+sz = 200;    % length of gaussFilter vector
 x = linspace(-sz / 2, sz / 2, sz);
 doppler_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
-doppler_kernel = doppler_kernel / sum (doppler_kernel); % normalize
+doppler_kernel = doppler_kernel / sum(doppler_kernel); % normalize
 
-dt = 1;
+dt = 0.5;
 
 %NEED TO CHANGE THIS TO INF. LOOP?
 for iter=1:224
     accum = zeros(279,256);
-    datpath='C:\Users\NGoya_000\Documents\DemoRad\RD\';
+    datpath='RD/';
     string=[datpath 'RD_' num2str(iter) '.mat'];
     load(string)
     
@@ -127,18 +127,18 @@ for iter=1:224
     RP          =   fft(MeasChn,NFFT,1);%/ScaWin;
     RPExt       =   RP(RMinIdx:RMaxIdx,:);    
 
-    for ii = 1:4
-        RD          =   fft(RPExt.*WinVel2D, NFFTVel, 2)./(1e10);
-        RD(:,:,ii)          =   fftshift(RD, 2);
-        accum = accum + RD(:,:,ii);
-    end
-
+    %for ii = 1:4
+    %    RD          =   fft(RPExt.*WinVel2D, NFFTVel, 2)./(1e10);
+    %    RD(:,:,ii)          =   fftshift(RD, 2);
+    %    accum = accum + RD(:,:,ii);
+    %end
+    RD = fft(RPExt.*WinVel2D, NFFTVel, 2)./(1e10);
+    RD = fftshift(RD, 2);
     % Make image of data, note only half of the range is used (other half is invalid)
-    pmf = abs(accum(1:140,:)/4);
+    pmf = abs(RD);
     noiseLevel=conv2(pmf,cfarWin,'same');
+    offset = 1e-6;
     cfarThreshold=noiseLevel+offset;
-% 
-%     % create binary mask from cfarTheshold
     Idx = pmf - cfarThreshold <= 0;
     % remove detections around 0 velocity
     Idx(:,vVel < 0.5 & vVel > - 0.5) = 1;
@@ -206,7 +206,8 @@ for iter=1:224
 %     pause(0.025)
     
     subplot(2, 2, 1);
-    imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
+    %imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
+    imagesc(vVel, vRangeExt, abs(RD));
     title('Raw Range-doppler over all channels')
     grid on;
     xlabel('v (m/s)');
@@ -217,7 +218,7 @@ for iter=1:224
     set(gca,'YDir','normal')
     
     subplot(2, 2, 2);
-    imagesc(vVel, vRange(1:128), pmf);
+    imagesc(vVel, vRangeExt, pmf);
     title('Range-doppler CFAR')
     grid on;
     xlabel('v (m/s)');
@@ -228,7 +229,7 @@ for iter=1:224
     set(gca,'YDir','normal')
     
     subplot(2, 2, 3);
-    imagesc(vVel, vRange(1:128), belief);
+    imagesc(vVel, vRangeExt, belief);
     title('Histogram filter');
     colorbar;
     set(gca,'YDir','normal')
@@ -237,10 +238,10 @@ for iter=1:224
     subplot(2, 2, 4);
     plot(vVel(j), vRange(i), 'r*'); %plot the tracker (v,R)
     xlim([vVel(1) vVel(end)]);
-    ylim([vRange(1) vRange(128)]);
+    ylim([vRange(1) vRangeExt(end)]);
     title('Tracker');
     colorbar;
     fprintf('TRACKER: R: %f\t v: %f\n', vRange(i), vVel(j));
-    pause(0.025)
+    pause(1)
 end
 
