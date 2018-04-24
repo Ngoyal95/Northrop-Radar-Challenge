@@ -13,9 +13,33 @@ c0          =   3e8;
 %--------------------------------------------------------------------------
 % Include all necessary directories
 %--------------------------------------------------------------------------
+CurPath = pwd();
+addpath([CurPath,'/../../DemoRadUsb']);
+addpath([CurPath,'/../../Class']);
+
+%--------------------------------------------------------------------------
+% Setup Connection
+%--------------------------------------------------------------------------
+Brd         =   Adf24Tx2Rx4();
+
+Brd.BrdRst();
+
+%--------------------------------------------------------------------------
+% Software Version
+%--------------------------------------------------------------------------
+Brd.BrdDispSwVers();
+
 %--------------------------------------------------------------------------
 % Configure Receiver
 %--------------------------------------------------------------------------
+Brd.RfRxEna();
+TxPwr           =   80;
+NrFrms          =   4;
+
+%--------------------------------------------------------------------------
+% Configure Transmitter (Antenna 0 - 4, Pwr 0 - 31)
+%--------------------------------------------------------------------------
+Brd.RfTxEna(1, TxPwr);
 
 %--------------------------------------------------------------------------
 % Configure Up-Chirp
@@ -33,23 +57,24 @@ Cfg.TRampUp     =   280e-6;
 Cfg.Tp          =   284e-6;
 Cfg.N           =   256;
 Cfg.StrtIdx     =   0;
-Cfg.StopIdx     =   128;
+Cfg.StopIdx     =   64;
 Cfg.Np          =   Cfg.StopIdx - Cfg.StrtIdx;
 
+Brd.RfMeas('Adi', Cfg);
 
 %--------------------------------------------------------------------------
 % Read actual configuration
 %--------------------------------------------------------------------------
-NrChn           =   4
-N               =   256
-fs              =   1e6;
+NrChn           =   Brd.Get('NrChn');
+N               =   Brd.Get('N');
+fs              =   Brd.Get('fs');
 
 %--------------------------------------------------------------------------
 % Configure Signal Processing
 %--------------------------------------------------------------------------
 % Processing of range profile
-%Win2D           =   Brd.hanning(N,Cfg.Np);
-%ScaWin          =   sum(Win2D(:,1));
+Win2D           =   Brd.hanning(N,Cfg.Np);
+ScaWin          =   sum(Win2D(:,1));
 NFFT            =   2^12;
 NFFTVel         =   2^8;
 kf              =   (Cfg.fStop - Cfg.fStrt)/Cfg.TRampUp;
@@ -63,22 +88,12 @@ RMax            =   10;
 [Val RMaxIdx]   =   min(abs(vRange - RMax));
 vRangeExt       =   vRange(RMinIdx:RMaxIdx);
 
-WinVel          =   hanning(128);
+WinVel          =   Brd.hanning(Cfg.Np);
 ScaWinVel       =   sum(WinVel);
 WinVel2D        =   repmat(WinVel.',numel(vRangeExt),1);
 
 vFreqVel        =   [-NFFTVel./2:NFFTVel./2-1].'./NFFTVel.*(1/Cfg.Tp);
 vVel            =   vFreqVel*c0/(2.*fc); 
-
-%loop over all 4 channels
-nRng = 256;
-nDopp = 128;
-%Initialize matrix for holding range/Doppler maps for each channel
-RangexDopplerxChannel = zeros(nRng,nDopp,4);
-
-% Dont touch above code, initializes data sets and computes the velocities
-% for us
-
 
     
 %CFAR Implementation
@@ -111,29 +126,33 @@ x = linspace(-sz / 2, sz / 2, sz);
 doppler_kernel = exp(-x .^ 2 / (2 * sigma ^ 2))';
 doppler_kernel = doppler_kernel / sum(doppler_kernel); % normalize
 
-dt = 0.5;
+dt = 0;
 
 %NEED TO CHANGE THIS TO INF. LOOP?
-for iter=1:224
+tic
+while true
     accum = zeros(279,256);
-    datpath='RD/';
-    string=[datpath 'RD_' num2str(iter) '.mat'];
-    load(string)
-    
-    Datan        =   sum(Data,2);   
-    
-    MeasChn     =   reshape(Datan,N,Cfg.Np);
+%     datpath='RD/';
+%     string=[datpath 'RD_' num2str(iter) '.mat'];
+%     load(string)
+%     
+%     Datan        =   sum(Data,2);   
+%     
+%     MeasChn     =   reshape(Datan,N,Cfg.Np);
+%     % Calculate range profile including calibration
+%     RP          =   fft(MeasChn,NFFT,1);%/ScaWin;
+%     RPExt       =   RP(RMinIdx:RMaxIdx,:);    
+
+    Data        =   Brd.BrdGetData();     
+    dt = toc;
+    MeasChn     =   reshape(Data(:,1),N,Cfg.Np);
     % Calculate range profile including calibration
-    RP          =   fft(MeasChn,NFFT,1);%/ScaWin;
+    RP          =   fft(MeasChn.*Win2D,NFFT,1).*Brd.FuSca/ScaWin;
     RPExt       =   RP(RMinIdx:RMaxIdx,:);    
 
-    %for ii = 1:4
-    %    RD          =   fft(RPExt.*WinVel2D, NFFTVel, 2)./(1e10);
-    %    RD(:,:,ii)          =   fftshift(RD, 2);
-    %    accum = accum + RD(:,:,ii);
-    %end
-    RD = fft(RPExt.*WinVel2D, NFFTVel, 2)./(1e10);
-    RD = fftshift(RD, 2);
+    RD          =   fft(RPExt.*WinVel2D, NFFTVel, 2)./ScaWinVel;
+    RD          =   fftshift(RD, 2);
+    
     % Make image of data, note only half of the range is used (other half is invalid)
     pmf = abs(RD);
     noiseLevel=conv2(pmf,cfarWin,'same');
@@ -141,7 +160,7 @@ for iter=1:224
     cfarThreshold=noiseLevel+offset;
     Idx = pmf - cfarThreshold <= 0;
     % remove detections around 0 velocity
-    Idx(:,vVel < 0.5 & vVel > - 0.5) = 1;
+    Idx(:,vVel < 1 & vVel > -1) = 1;
     % dilate the mask to get more information about detections
     Idx = logical(1 - Idx);
     se = strel('disk', 5);
@@ -160,10 +179,10 @@ for iter=1:224
     for i = 1:size(belief, 2)
         % shift ranges according to velocity
         if vVel(i) > 0
-            n = floor(vVel(i) * dt + 0.5);
+            n = min(floor(vVel(i) * dt + 0.5), 278);
             belief(:, i) = [zeros(n, 1); belief(1:end-n, i)];     
         else
-            n = floor(-vVel(i) * dt + 0.5);
+            n = min(floor(-vVel(i) * dt + 0.5), 278);
             belief(:, i) = [belief(n+1:end, i); zeros(n, 1)];
         end
         
@@ -186,62 +205,47 @@ for iter=1:224
     end
     belief = belief / sum(belief(:));
    
-    % Display range profile
-%         figure(1)
-%         plot(vRangeExt, 20.*log10(abs(RPExt)));
-%         grid on;
-%         xlabel('R (m)');
-%         ylabel('X (dBV)');
-%         axis([vRangeExt(1) vRangeExt(end) -120 -40])
-
-    % Display range doppler map
-%     figure(2)
+%     subplot(2, 2, 1);
+%     %imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
 %     imagesc(vVel, vRangeExt, abs(RD));
+%     title('Raw Range-doppler over all channels')
 %     grid on;
 %     xlabel('v (m/s)');
 %     ylabel('R (m)');
 %     colormap('jet')
-% 
-%     drawnow
-%     pause(0.025)
+%     colorbar;
+%     %caxis([-20 20])
+%     set(gca,'YDir','normal')
     
-    subplot(2, 2, 1);
-    %imagesc(vVel, vRange(1:128), 10*log10(abs(accum(1:128,:)/4)));
-    imagesc(vVel, vRangeExt, abs(RD));
-    title('Raw Range-doppler over all channels')
-    grid on;
-    xlabel('v (m/s)');
-    ylabel('R (m)');
-    colormap('jet')
-    colorbar;
-    %caxis([-20 20])
-    set(gca,'YDir','normal')
-    
-    subplot(2, 2, 2);
-    imagesc(vVel, vRangeExt, pmf);
-    title('Range-doppler CFAR')
-    grid on;
-    xlabel('v (m/s)');
-    ylabel('R (m)');
-    colormap('jet')
-    colorbar;
-    caxis([0 1])
-    set(gca,'YDir','normal')
-    
-    subplot(2, 2, 3);
-    imagesc(vVel, vRangeExt, belief);
-    title('Histogram filter');
-    colorbar;
-    set(gca,'YDir','normal')
+    %subplot(2, 2, 2);
+    %imagesc(vVel, vRangeExt, pmf);
+    %title('Range-doppler CFAR')
+    %grid on;
+    %%xlabel('v (m/s)');
+    %ylabel('R (m)');
+%     colormap('jet')
+%     colorbar;
+%     caxis([0 1])
+%     set(gca,'YDir','normal')
+%     
+    %subplot(2, 2, 3);
+    %imagesc(vVel, vRangeExt, belief);
+    %title('Histogram filter');
+    %colorbar;
+    %set(gca,'YDir','normal')
     
     [i, j] = find(belief == max(belief(:)));
-    subplot(2, 2, 4);
-    plot(vVel(j), vRange(i), 'r*'); %plot the tracker (v,R)
-    xlim([vVel(1) vVel(end)]);
-    ylim([vRange(1) vRangeExt(end)]);
-    title('Tracker');
-    colorbar;
-    fprintf('TRACKER: R: %f\t v: %f\n', vRange(i), vVel(j));
-    pause(1)
+    
+    %subplot(2, 2, 4);
+    %plot(vVel(j), vRange(i), 'r*'); %plot the tracker (v,R)
+    %xlim([vVel(1) vVel(end)]);
+    %ylim([vRange(1) vRangeExt(end)]);
+    %title('Tracker');
+    %colorbar;
+    if length(i) == 1
+        fprintf('write status %d', write_detections(vRange(i), vVel(j)));
+        fprintf('TRACKER: R: %f\t v: %f\n', vRange(i), vVel(j));
+    end
+    %pause(0.001)
 end
 
